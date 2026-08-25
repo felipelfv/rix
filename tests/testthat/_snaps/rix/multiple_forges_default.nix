@@ -92,7 +92,7 @@ let
     LC_PAPER = "en_US.UTF-8";
     LC_MEASUREMENT = "en_US.UTF-8";
     
-    buildInputs = [ fifo nert read.abares system_packages ];
+    buildInputs = pkgs.lib.flatten [ fifo nert read.abares system_packages ];
     
   }; 
 in

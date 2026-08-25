@@ -18,7 +18,7 @@ let
   };
  
   wrapped_pkgs = pkgs.rstudioWrapper.override {
-    packages = [  rpkgs  ];
+    packages = pkgs.lib.flatten [  rpkgs  ];
   };
  
   shell = pkgs.mkShell {
@@ -30,7 +30,7 @@ let
     LC_PAPER = "en_US.UTF-8";
     LC_MEASUREMENT = "en_US.UTF-8";
     
-    buildInputs = [ rpkgs system_packages wrapped_pkgs ];
+    buildInputs = pkgs.lib.flatten [ rpkgs system_packages wrapped_pkgs ];
     
   }; 
 in

@@ -207,7 +207,7 @@ let
     LC_PAPER = "en_US.UTF-8";
     LC_MEASUREMENT = "en_US.UTF-8";
     
-    buildInputs = [ colourScaleR rpkgs system_packages ];
+    buildInputs = pkgs.lib.flatten [ colourScaleR rpkgs system_packages ];
     
   }; 
 in

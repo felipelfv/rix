@@ -99,7 +99,7 @@ let
     LC_PAPER = "en_US.UTF-8";
     LC_MEASUREMENT = "en_US.UTF-8";
     
-    buildInputs = [ housing fusen AER rpkgs tex system_packages ];
+    buildInputs = pkgs.lib.flatten [ housing fusen AER rpkgs tex system_packages ];
     
   }; 
 in

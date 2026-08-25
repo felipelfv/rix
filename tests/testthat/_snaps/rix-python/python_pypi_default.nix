@@ -43,7 +43,7 @@ let
     LC_MEASUREMENT = "en_US.UTF-8";
     RETICULATE_PYTHON = "${pkgs.python312}/bin/python";
 
-    buildInputs = [ pyconf system_packages ];
+    buildInputs = pkgs.lib.flatten [ pyconf system_packages ];
     
   }; 
 in

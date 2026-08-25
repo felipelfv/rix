@@ -32,7 +32,7 @@ let
     LC_MEASUREMENT = "en_US.UTF-8";
     RETICULATE_PYTHON = "${pkgs.python312}/bin/python";
 
-    buildInputs = [ pyconf system_packages ];
+    buildInputs = pkgs.lib.flatten [ pyconf system_packages ];
     shellHook = ''
     export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath (with pkgs; [ zlib gcc.cc glibc stdenv.cc.cc ])}":$LD_LIBRARY_PATH;
   '';

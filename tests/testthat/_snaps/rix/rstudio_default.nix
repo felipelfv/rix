@@ -93,7 +93,7 @@ let
   };
  
   wrapped_pkgs = pkgs.rstudioWrapper.override {
-    packages = [ housing fusen AER rpkgs  ];
+    packages = pkgs.lib.flatten [ housing fusen AER rpkgs  ];
   };
  
   shell = pkgs.mkShell {
@@ -105,7 +105,7 @@ let
     LC_PAPER = "en_US.UTF-8";
     LC_MEASUREMENT = "en_US.UTF-8";
     
-    buildInputs = [ housing fusen AER rpkgs tex system_packages wrapped_pkgs ];
+    buildInputs = pkgs.lib.flatten [ housing fusen AER rpkgs tex system_packages wrapped_pkgs ];
     
   }; 
 in

@@ -411,7 +411,7 @@ let
     LC_PAPER = "en_US.UTF-8";
     LC_MEASUREMENT = "en_US.UTF-8";
     
-    buildInputs = [ CSFAtlasTools datathin rpkgs system_packages ];
+    buildInputs = pkgs.lib.flatten [ CSFAtlasTools datathin rpkgs system_packages ];
     
   }; 
 in
