@@ -1,0 +1,139 @@
+# Builds and publishes the images in this folder to the GitHub Container
+# Registry of the org this repository lives in.
+#
+# NOTE: this file is intentionally NOT under .github/workflows in the {rix}
+# repository. It is meant to be moved there once these Dockerfiles live in
+# their own repository under the rstats-on-nix organisation. See
+# docker/README.md.
+#
+# Images are built natively on amd64 and arm64 runners rather than under QEMU:
+# emulated Nix builds are slow, and anything missing from the binary cache
+# would be compiled from source.
+
+name: Publish images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ubuntu/**"
+      - "alpine/**"
+      - ".github/workflows/publish-images.yml"
+  schedule:
+    # Rebuild monthly so that base images and the binary cache stay fresh
+    - cron: "0 4 1 * *"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        base: [ubuntu, alpine]
+        target: [nix, rix]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image name
+        id: image
+        run: |
+          if [ "${{ matrix.target }}" = "nix" ]; then
+            prefix="nix"
+          else
+            prefix="rix"
+          fi
+          echo "name=${REGISTRY}/${{ github.repository_owner }}/${prefix}-${{ matrix.base }}" \
+            | tr '[:upper:]' '[:lower:]' >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.base }}
+          target: ${{ matrix.target }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.base }}-${{ matrix.target }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.base }}-${{ matrix.target }}-${{ matrix.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.base }}-${{ matrix.target }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        base: [ubuntu, alpine]
+        target: [nix, rix]
+    steps:
+      - name: Set image name
+        id: image
+        run: |
+          if [ "${{ matrix.target }}" = "nix" ]; then
+            prefix="nix"
+          else
+            prefix="rix"
+          fi
+          echo "name=${REGISTRY}/${{ github.repository_owner }}/${prefix}-${{ matrix.base }}" \
+            | tr '[:upper:]' '[:lower:]' >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-${{ matrix.base }}-${{ matrix.target }}-*
+          merge-multiple: true
+          path: /tmp/digests
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tagged with the build date, mirroring the date-based snapshots of
+      # rstats-on-nix/nixpkgs, plus `latest`
+      - name: Create manifest list
+        working-directory: /tmp/digests
+        run: |
+          date_tag="$(date -u +%Y-%m-%d)"
+          docker buildx imagetools create \
+            -t "${{ steps.image.outputs.name }}:latest" \
+            -t "${{ steps.image.outputs.name }}:${date_tag}" \
+            $(printf '${{ steps.image.outputs.name }}@sha256:%s ' *)
+
+      - name: Inspect
+        run: docker buildx imagetools inspect "${{ steps.image.outputs.name }}:latest"
