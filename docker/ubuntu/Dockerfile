@@ -15,10 +15,10 @@ FROM ubuntu:24.04 AS nix
 # namespaces, which are not always available inside a container, and
 # `--init none` because there is no init system to register the daemon with.
 # The rstats-on-nix cache is configured here so that R packages are downloaded
-# as binaries instead of being compiled from source.
+# as binaries instead of being compiled from source. Extra nix.conf lines can
+# be passed through NIX_EXTRA_CONF.
 ARG NIX_EXTRA_CONF=""
-
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -32,11 +32,13 @@ RUN curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/
     --extra-conf "sandbox = false" \
     --extra-conf "extra-substituters = https://rstats-on-nix.cachix.org" \
     --extra-conf "extra-trusted-public-keys = rstats-on-nix.cachix.org-1:vdiiVgocg6WeJrODIqdprZRUrhi1JzhBnXv7aWI6+F0=" \
-    --extra-conf "${NIX_EXTRA_CONF}" \
+    ${NIX_EXTRA_CONF:+--extra-conf "${NIX_EXTRA_CONF}"} \
     --init none \
     --no-confirm
 
 ENV PATH="${PATH}:/nix/var/nix/profiles/default/bin"
+# The installer expects `$USER` to be set, and {rix} defaults to the
+# `nix-shell` user when it's absent
 ENV USER=root
 ENV user=root
 
@@ -50,15 +52,21 @@ CMD ["bash"]
 FROM nix AS rix
 
 # The `default.nix` shipped with {rix} provides R, {rix} and {rixpress}.
-# Pin this to a tag or commit for a reproducible image.
+# It pins nixpkgs and the package commits itself, so pinning RIX_REF to a
+# commit (as CI does) makes the image fully reproducible.
 ARG RIX_REF=main
 
 RUN curl -fsSL -o /rix.nix \
   "https://raw.githubusercontent.com/ropensci/rix/${RIX_REF}/inst/extdata/default.nix"
 
 # Realise the environment now so that containers start instantly instead of
-# downloading R and {rix} on first use
-RUN nix-shell /rix.nix --run 'Rscript -e "cat(as.character(packageVersion(\"rix\")), \"\n\")"'
+# downloading R and {rix} on first use. `mkShell` itself cannot be built, so a
+# `buildEnv` of its inputs is built instead and kept as a GC root, so that a
+# downstream `nix-collect-garbage` does not throw R and {rix} away.
+RUN nix-build --no-out-link -E 'with import /rix.nix; pkgs.buildEnv { name = "rix-env"; paths = shell.buildInputs; ignoreCollisions = true; }' \
+  | xargs nix-store --add-root /nix/var/nix/gcroots/rix -r > /dev/null \
+  && nix-shell /rix.nix --run 'Rscript -e "cat(as.character(packageVersion(\"rix\")), \"\n\")"' \
+  && rm -rf /root/.cache/nix
 
 # `rix-shell` drops you into that environment; `rix-shell --run "..."` runs a
 # command in it, e.g. `docker run rix-ubuntu rix-shell --run "Rscript gen.R"`

@@ -1,5 +1,5 @@
-# Builds and publishes the images in this folder to the GitHub Container
-# Registry of the org this repository lives in.
+# Builds, tests and publishes the images in this folder to the GitHub
+# Container Registry of the org this repository lives in.
 #
 # NOTE: this file is intentionally NOT under .github/workflows in the {rix}
 # repository. It is meant to be moved there once these Dockerfiles live in
@@ -18,18 +18,38 @@ on:
     paths:
       - "ubuntu/**"
       - "alpine/**"
+      - "test/**"
       - ".github/workflows/publish-images.yml"
   schedule:
     # Rebuild monthly so that base images and the binary cache stay fresh
     - cron: "0 4 1 * *"
   workflow_dispatch:
 
+# A scheduled run and a push should not race each other for the `latest` tag
+concurrency:
+  group: publish-images
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  # Resolve `main` of ropensci/rix to a commit once, so that all four `rix`
+  # images bootstrap from the same, pinned `inst/extdata/default.nix`.
+  pin:
+    runs-on: ubuntu-latest
+    outputs:
+      rix_ref: ${{ steps.ref.outputs.sha }}
+    steps:
+      - id: ref
+        run: |
+          sha="$(git ls-remote https://github.com/ropensci/rix refs/heads/main | cut -f1)"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
   build:
     runs-on: ${{ matrix.runner }}
+    needs: pin
     permissions:
       contents: read
       packages: write
@@ -44,19 +64,22 @@ jobs:
             runner: ubuntu-latest
           - arch: arm64
             runner: ubuntu-24.04-arm
+    env:
+      IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.target }}-${{ matrix.base }}
     steps:
       - uses: actions/checkout@v4
 
+      # The `rix` images are ~5.5 GB; the default runner has ~14 GB free
+      - name: Free disk space
+        if: matrix.target == 'rix'
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          docker-images: false
+
       - name: Set image name
         id: image
-        run: |
-          if [ "${{ matrix.target }}" = "nix" ]; then
-            prefix="nix"
-          else
-            prefix="rix"
-          fi
-          echo "name=${REGISTRY}/${{ github.repository_owner }}/${prefix}-${{ matrix.base }}" \
-            | tr '[:upper:]' '[:lower:]' >> "$GITHUB_OUTPUT"
+        run: echo "name=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -66,16 +89,43 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push by digest
+      # Layer caching in the GitHub Actions cache is capped at 10 GB per
+      # repository, so only the small `nix` stage is cached; the `rix` layers
+      # would just evict each other.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.base }}
+          target: ${{ matrix.target }}
+          platforms: linux/${{ matrix.arch }}
+          build-args: RIX_REF=${{ needs.pin.outputs.rix_ref }}
+          labels: org.opencontainers.image.revision.rix=${{ needs.pin.outputs.rix_ref }}
+          load: true
+          tags: ${{ steps.image.outputs.name }}:test
+          cache-from: type=gha,scope=${{ matrix.base }}-nix-${{ matrix.arch }}
+          cache-to: ${{ matrix.target == 'nix' && format('type=gha,mode=max,scope={0}-nix-{1}', matrix.base, matrix.arch) || '' }}
+
+      - name: Smoke test (nix)
+        if: matrix.target == 'nix'
+        run: docker run --rm "${{ steps.image.outputs.name }}:test" nix --version
+
+      - name: Smoke test (rix)
+        if: matrix.target == 'rix'
+        run: |
+          docker run --rm -v "$PWD/test:/test:ro" "${{ steps.image.outputs.name }}:test" \
+            rix-shell --run "Rscript /test/smoke.R && nix-build /tmp/smoke"
+
+      # Same inputs as above, so this is served from the local build cache
+      - name: Push by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.base }}
           target: ${{ matrix.target }}
           platforms: linux/${{ matrix.arch }}
+          build-args: RIX_REF=${{ needs.pin.outputs.rix_ref }}
+          labels: org.opencontainers.image.revision.rix=${{ needs.pin.outputs.rix_ref }}
           outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.base }}-${{ matrix.target }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.base }}-${{ matrix.target }}-${{ matrix.arch }}
 
       - name: Export digest
         run: |
@@ -100,17 +150,12 @@ jobs:
       matrix:
         base: [ubuntu, alpine]
         target: [nix, rix]
+    env:
+      IMAGE: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.target }}-${{ matrix.base }}
     steps:
       - name: Set image name
         id: image
-        run: |
-          if [ "${{ matrix.target }}" = "nix" ]; then
-            prefix="nix"
-          else
-            prefix="rix"
-          fi
-          echo "name=${REGISTRY}/${{ github.repository_owner }}/${prefix}-${{ matrix.base }}" \
-            | tr '[:upper:]' '[:lower:]' >> "$GITHUB_OUTPUT"
+        run: echo "name=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v4
         with:
@@ -124,8 +169,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Tagged with the build date, mirroring the date-based snapshots of
-      # rstats-on-nix/nixpkgs, plus `latest`
+      # Tagged with the *build* date plus `latest`. Note this is not the
+      # rstats-on-nix snapshot date pinned inside the image.
       - name: Create manifest list
         working-directory: /tmp/digests
         run: |

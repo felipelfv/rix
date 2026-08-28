@@ -28,8 +28,8 @@ CMD ["nix-shell"]
 | `ubuntu/Dockerfile` (`--target rix`) | `rix-ubuntu` | the above + R, `{rix}` and `{rixpress}`, pre-realised |
 | `alpine/Dockerfile` (`--target nix`) | `nix-alpine` | Alpine 3.22 + Nix + the `rstats-on-nix` cache |
 | `alpine/Dockerfile` (`--target rix`) | `rix-alpine` | the above + R, `{rix}` and `{rixpress}`, pre-realised |
-| `workflows/publish-images.yml` | — | CI that builds all four natively on amd64 and arm64 and pushes them to `ghcr.io` |
-| `test/smoke.R` | — | generates an environment with `{rix}`, used to check the `rix` images |
+| `workflows/publish-images.yml` | — | CI that builds all four natively on amd64 and arm64, smoke-tests them and pushes them to `ghcr.io` |
+| `test/smoke.R` | — | generates an environment with `{rix}`; CI runs it and then `nix-build`s the result in each `rix` image before pushing |
 
 The `rix` variants ship a `rix-shell` helper: `rix-shell` drops you into the
 R + `{rix}` environment, and `rix-shell --run "Rscript generate_env.R"` runs a
@@ -47,8 +47,14 @@ docker build --target rix -t rix-alpine docker/alpine
 
 Both `rix` variants take a `RIX_REF` build argument (a branch, tag or commit of
 `ropensci/rix`) that selects which `inst/extdata/default.nix` is used to
-bootstrap R and `{rix}`. It defaults to `main`; pin it for a reproducible
-image.
+bootstrap R and `{rix}`. That file pins nixpkgs and the package commits itself,
+so pinning `RIX_REF` to a commit makes the image fully reproducible. It
+defaults to `main` for local builds; CI resolves `main` to a commit once per run
+and records it in the `org.opencontainers.image.revision.rix` label.
+
+The pre-realised R + `{rix}` closure is registered as a GC root
+(`/nix/var/nix/gcroots/rix`), so running `nix-collect-garbage` in a derived
+image does not throw it away.
 
 ## How Nix is installed
 
@@ -71,18 +77,27 @@ smaller and simpler.
 
 ## Measured sizes
 
-Built on `linux/arm64`, on 2026-08-27:
+Built on `linux/arm64`, on 2026-08-28:
 
 | Image | Size |
 | --- | --- |
 | `nix-alpine` | 406 MB |
 | `nix-ubuntu` | 532 MB |
-| `rix-alpine` | 5.42 GB |
-| `rix-ubuntu` | 5.55 GB |
+| `rix-alpine` | 5.01 GB |
+| `rix-ubuntu` | 5.55 GB (before the Nix cache cleanup, expect ~5.1 GB) |
 
 The `rix` variants are dominated by R and its dependency closure, so the choice
 of base barely registers there. Alpine is worth roughly 100 MB on the plain Nix
 images.
+
+## CI notes
+
+The `rix` images are ~5.5 GB, so the workflow frees disk space on the runner
+before building them and only caches the small `nix` stage in the GitHub
+Actions cache (which is capped at 10 GB per repository). Each image is loaded
+and smoke-tested locally before being pushed by digest; the `merge` job then
+assembles the amd64 + arm64 manifests and tags them `latest` and with the
+build date (not the rstats-on-nix snapshot date pinned inside the image).
 
 ## Where this should live
 

@@ -1,9 +1,10 @@
-# Smoke test for the `rix` image variants: generate an environment with {rix}
-# and check that the resulting expression builds.
+# Smoke test for the `rix` image variants: generate an environment with {rix},
+# then check that the resulting expression builds (run from the workflow via
+# `rix-shell --run "Rscript /test/smoke.R && nix-build /tmp/smoke"`).
 library(rix)
 
 rix(
-  date = available_dates()[length(available_dates())],
+  date = tail(available_dates(), 1),
   r_pkgs = "dplyr",
   ide = "none",
   project_path = "/tmp/smoke",
